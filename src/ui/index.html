@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenGrokBot-Prime</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #12181f;
+      --border: #1e2833;
+      --text: #e6edf3;
+      --muted: #8b9bab;
+      --accent: #3b82f6;
+      --danger: #ef4444;
+      --ok: #22c55e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: grid;
+      grid-template-columns: 240px 1fr 320px;
+    }
+    aside, main, .side {
+      border-right: 1px solid var(--border);
+      overflow: auto;
+    }
+    .side { border-right: none; border-left: 1px solid var(--border); }
+    header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .agent, .approval, .fact {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .agent small, .fact small { color: var(--muted); display: block; margin-top: 2px; }
+    #chat {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    #messages {
+      flex: 1;
+      overflow: auto;
+      padding: 16px;
+    }
+    .msg {
+      max-width: 80%;
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      font-size: 14px;
+    }
+    .msg.user { background: #1d4ed8; margin-left: auto; }
+    .msg.assistant { background: var(--panel); border: 1px solid var(--border); }
+    #composer {
+      display: flex;
+      gap: 8px;
+      padding: 12px;
+      border-top: 1px solid var(--border);
+    }
+    #composer input {
+      flex: 1;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 10px 12px;
+      outline: none;
+    }
+    button {
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button.deny { background: var(--danger); }
+    button.approve { background: var(--ok); }
+    .actions { display: flex; gap: 6px; margin-top: 8px; }
+    .empty { color: var(--muted); padding: 16px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <aside>
+    <header>Agents</header>
+    <div id="agents"><div class="empty">Loading…</div></div>
+  </aside>
+  <main id="chat">
+    <header>OpenGrokBot-Prime</header>
+    <div id="messages"></div>
+    <div id="composer">
+      <input id="input" placeholder="Ask the team…" autocomplete="off" />
+      <button id="send">Send</button>
+    </div>
+  </main>
+  <div class="side">
+    <header>Approvals</header>
+    <div id="approvals"><div class="empty">None pending</div></div>
+    <header>Memory</header>
+    <div id="facts"><div class="empty">—</div></div>
+  </div>
+
+  <script>
+    const API = "";
+
+    async function j(path, opts) {
+      const r = await fetch(API + path, {
+        headers: { "Content-Type": "application/json" },
+        ...opts,
+      });
+      return r.json();
+    }
+
+    function addMsg(role, text) {
+      const el = document.createElement("div");
+      el.className = "msg " + role;
+      el.textContent = text;
+      document.getElementById("messages").appendChild(el);
+      el.scrollIntoView({ behavior: "smooth" });
+    }
+
+    async function refreshAgents() {
+      const agents = await j("/agents");
+      const root = document.getElementById("agents");
+      root.innerHTML = "";
+      for (const a of agents) {
+        const d = document.createElement("div");
+        d.className = "agent";
+        d.innerHTML = `<strong>${a.name}</strong><small>${a.role} · ${a.tools.join(", ")}</small>`;
+        root.appendChild(d);
+      }
+    }
+
+    async function refreshApprovals() {
+      const list = await j("/approvals");
+      const root = document.getElementById("approvals");
+      root.innerHTML = "";
+      if (!list.length) {
+        root.innerHTML = '<div class="empty">None pending</div>';
+        return;
+      }
+      for (const a of list) {
+        const d = document.createElement("div");
+        d.className = "approval";
+        d.innerHTML = `<strong>${a.action}</strong><div>${a.description}</div>
+          <div class="actions">
+            <button class="approve" data-id="${a.id}" data-ok="1">Approve</button>
+            <button class="deny" data-id="${a.id}" data-ok="0">Deny</button>
+          </div>`;
+        root.appendChild(d);
+      }
+      root.querySelectorAll("button").forEach((btn) => {
+        btn.onclick = async () => {
+          await j("/approvals/" + btn.dataset.id + "/resolve", {
+            method: "POST",
+            body: JSON.stringify({ approved: btn.dataset.ok === "1" }),
+          });
+          refreshApprovals();
+        };
+      });
+    }
+
+    async function refreshFacts() {
+      const facts = await j("/memory/facts");
+      const root = document.getElementById("facts");
+      root.innerHTML = "";
+      if (!facts.length) {
+        root.innerHTML = '<div class="empty">No facts yet</div>';
+        return;
+      }
+      for (const f of facts.slice(0, 30)) {
+        const d = document.createElement("div");
+        d.className = "fact";
+        d.innerHTML = `<strong>${f.key}</strong><small>${f.value.slice(0, 120)}</small>`;
+        root.appendChild(d);
+      }
+    }
+
+    document.getElementById("send").onclick = async () => {
+      const input = document.getElementById("input");
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      addMsg("user", text);
+      addMsg("assistant", "Working…");
+      try {
+        const res = await j("/chat", { method: "POST", body: JSON.stringify({ message: text }) });
+        const msgs = document.getElementById("messages");
+        msgs.lastChild.textContent = res.reply || JSON.stringify(res);
+        refreshApprovals();
+        refreshFacts();
+      } catch (e) {
+        document.getElementById("messages").lastChild.textContent = "Error: " + e.message;
+      }
+    };
+
+    document.getElementById("input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") document.getElementById("send").click();
+    });
+
+    refreshAgents();
+    refreshApprovals();
+    refreshFacts();
+    setInterval(refreshApprovals, 4000);
+  </script>
+</body>
+</html>
