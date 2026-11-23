@@ -1,30 +1,31 @@
 /**
- * Quick smoke test for OpenCode free-model routing.
- * Run: npm run test:opencode
+ * Probe OpenCode CLI + free-only routing.
+ * Requires `opencode` on PATH (or OPENCODE_CLI).
  */
-import dotenv from "dotenv";
-dotenv.config();
-
-import { OpenCodeBackend } from "../src/backends/opencode.js";
+import { modelRouter } from "../src/backends/router.js";
 
 async function main() {
-  const backend = new OpenCodeBackend();
-  console.log("Free models:", backend.listFreeModels());
+  console.log("FREE_ONLY:", modelRouter.isFreeOnly());
+  console.log("Free models:", modelRouter.listFreeModels());
+
+  const ping = await modelRouter.pingOpenCode();
+  console.log("CLI ping:", ping);
+
+  if (!ping.ok) {
+    console.error("Install OpenCode CLI: https://opencode.ai  (or set OPENCODE_CLI)");
+    process.exit(1);
+  }
 
   try {
-    const res = await backend.chat({
+    const res = await modelRouter.chat({
+      messages: [{ role: "user", content: "Reply with exactly: pong" }],
       preferFree: true,
-      messages: [
-        { role: "user", content: "Reply with exactly: OpenGrokBot-Prime online" },
-      ],
-      maxTokens: 64,
     });
-    console.log("Model used:", res.model);
-    console.log("Content:", res.content);
-    console.log("Usage:", res.usage);
+    console.log("Response model:", res.model);
+    console.log("Content:", res.content.slice(0, 300));
   } catch (e: any) {
-    console.error("OpenCode call failed (expected if no network / quota):", e.message);
-    process.exitCode = 1;
+    console.error("Chat failed:", e.message);
+    process.exit(1);
   }
 }
 
