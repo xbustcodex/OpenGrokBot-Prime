@@ -164,7 +164,7 @@
         d.innerHTML = `<strong>${esc(a.action)}</strong><div>${esc(a.description)}</div>
           <div class="actions">
             <button class="approve" data-id="${esc(a.id)}" data-ok="1">Approve</button>
-            <button class="deny" data-id="${a.id}" data-ok="0">Deny</button>
+            <button class="deny" data-id="${esc(a.id)}" data-ok="0">Deny</button>
           </div>`;
         root.appendChild(d);
       }
