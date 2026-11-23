@@ -1,232 +1,85 @@
-/**
- * Hardened MCP client hub.
- *
- * Security controls (2026 best practices):
- * - Tool namespacing (server__tool) to prevent shadow declarations
- * - Strict argument schema validation (additionalProperties: false where possible)
- * - Destructive / open-world tools require approval gate
- * - No shell string concatenation — spawn with argument arrays only
- * - Audit log for every tools/call
- * - Allowlist of registered servers; unknown tools rejected
- * - Optional cwd / env isolation per server
- */
-import { spawn, ChildProcess } from "node:child_process";
-import { EventEmitter } from "node:events";
+import {spawn} from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { approvalGate } from "../approval/gate.js";
-
-export interface McpTool {
-  name: string;
-  description?: string;
-  inputSchema?: Record<string, unknown>;
-  destructive?: boolean;
-  openWorld?: boolean;
+import Ajv from "ajv";
+import {approvalGate} from "../approval/gate.js";
+export interface McpTool {name:string;description?:string;inputSchema?:Record<string,unknown>;destructive?:boolean;openWorld?:boolean}
+export interface McpServerConfig {name:string;command:string;args?:string[];env?:Record<string,string>;cwd?:string;requireApproval?:string[];maxConcurrent?:number}
+type Pending={resolve:(v:any)=>void;reject:(e:Error)=>void;timer:NodeJS.Timeout};
+type Session={proc:ReturnType<typeof spawn>;config:McpServerConfig;tools:McpTool[];pending:Map<number,Pending>;buffer:string;nextId:number;inflight:number;ready:boolean};
+const ajv=new Ajv({strict:false,allErrors:true});
+export class McpClient {
+ private servers=new Map<string,Session>();private tools=new Map<string,{server:string;tool:McpTool}>();private connecting=new Map<string,Promise<McpTool[]>>();
+ private auditPath=process.env.MCP_AUDIT_LOG||"./data/mcp-audit.log";
+ private allow=process.env.MCP_ALLOWED_SERVERS?.split(",").map(x=>x.trim()).filter(Boolean);
+ constructor(){fs.mkdirSync(path.dirname(this.auditPath),{recursive:true})}
+ private audit(event:string,detail:Record<string,unknown>){try{fs.appendFileSync(this.auditPath,JSON.stringify({ts:new Date().toISOString(),event,...detail})+"\n")}catch{ /* log failure must not grant permissions */ }}
+ private fail(name:string,s:Session,err:Error){if(this.servers.get(name)!==s)return;this.servers.delete(name);for(const [k,v] of this.tools)if(v.server===name)this.tools.delete(k);for(const p of s.pending.values()){clearTimeout(p.timer);p.reject(err)}s.pending.clear();this.audit("server_exit",{server:name})}
+ private send(s:Session,m:Record<string,unknown>){if(!s.proc.stdin?.writable)throw Error("MCP stdin closed");s.proc.stdin.write(JSON.stringify({jsonrpc:"2.0",...m})+"\n")}
+ private receive(name:string,s:Session,chunk:Buffer){
+  s.buffer+=chunk.toString("utf8");
+  if(s.buffer.length>8388608){s.proc.kill();this.fail(name,s,Error("MCP buffer limit"));return}
+  while(true){const i=s.buffer.indexOf("\n");if(i<0)break;const line=s.buffer.slice(0,i).trim();s.buffer=s.buffer.slice(i+1);if(!line)continue;
+   if(line.length>4194304){s.proc.kill();this.fail(name,s,Error("MCP message limit"));return}
+   let m:any;try{m=JSON.parse(line);if(m.jsonrpc!=="2.0")throw Error("protocol")}catch{this.audit("invalid_message",{server:name});continue}
+   if(m.id!==undefined&&m.method===undefined){if(typeof m.id!=="number")continue;const p=s.pending.get(m.id);if(!p)continue;s.pending.delete(m.id);clearTimeout(p.timer);if(m.error)p.reject(Error("MCP "+m.error.code+": "+m.error.message));else p.resolve(m.result)}
+   else if(typeof m.method==="string"){if(m.id!==undefined)this.send(s,{id:m.id,error:{code:-32601,message:"Unsupported client method"}});this.audit("server_message",{server:name,method:m.method.slice(0,80)})}
+  }
+ }
+ private request(s:Session,method:string,params:Record<string,unknown>={},timeout=30000):Promise<any>{
+  const id=++s.nextId;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{s.pending.delete(id);reject(Error("MCP timeout: "+method))},timeout);s.pending.set(id,{resolve,reject,timer});try{this.send(s,{id,method,params})}catch(e){clearTimeout(timer);s.pending.delete(id);reject(e)}})
+ }
+ async connect(c:McpServerConfig):Promise<McpTool[]>{
+  if(!/^[a-zA-Z0-9_-]{1,64}$/.test(c.name)||c.name.includes("__"))throw Error("Invalid server name");
+  if(this.allow?.length&&!this.allow.includes(c.name))throw Error("Server not allowed");
+  const ready=this.servers.get(c.name);if(ready?.ready)return [...ready.tools];
+  const pending=this.connecting.get(c.name);if(pending)return pending;
+  const job=this.connectInternal(c);this.connecting.set(c.name,job);try{return await job}finally{this.connecting.delete(c.name)}
+ }
+ private async connectInternal(c:McpServerConfig):Promise<McpTool[]>{
+  if(!c.command.trim()||/[;&|$\r\n]/.test(c.command)||c.command.includes(String.fromCharCode(96)))throw Error("Invalid executable");
+  const proc=spawn(c.command,c.args||[],{shell:false,env:{...process.env,...c.env},cwd:c.cwd,stdio:["pipe","pipe","pipe"],windowsHide:true});
+  const s:Session={proc,config:c,tools:[],pending:new Map(),buffer:"",nextId:0,inflight:0,ready:false};this.servers.set(c.name,s);
+  proc.stdout?.on("data",(x:Buffer)=>this.receive(c.name,s,x));proc.stderr?.on("data",()=>this.audit("server_stderr",{server:c.name}));
+  proc.on("error",e=>this.fail(c.name,s,e));proc.on("exit",code=>this.fail(c.name,s,Error("MCP exited: "+code)));this.audit("server_connect",{server:c.name});
+  try{
+   const init=await this.request(s,"initialize",{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"OpenGrokBot-Prime",version:"0.1.0"}});
+   if(typeof init?.protocolVersion!=="string"||typeof init?.serverInfo?.name!=="string")throw Error("Invalid initialize response");
+   this.send(s,{method:"notifications/initialized"});
+   const found:McpTool[]=[];const cursors=new Set<string>();let cursor:string|undefined;
+   for(let page=0;page<100;page++){
+    const list=await this.request(s,"tools/list",cursor?{cursor}:{});
+    if(!Array.isArray(list?.tools))throw Error("Invalid tools/list");
+    for(const t of list.tools){if(typeof t?.name!=="string"||!t.name||t.name.includes("__"))throw Error("Invalid tool name");
+     const name=c.name+"__"+t.name;if(found.some(x=>x.name===name)||this.tools.has(name))throw Error("Duplicate tool");
+     found.push({name,description:t.description,inputSchema:t.inputSchema,destructive:t.annotations?.destructiveHint,openWorld:t.annotations?.openWorldHint});
+    }
+    cursor=list.nextCursor;if(!cursor)break;if(typeof cursor!=="string"||cursors.has(cursor))throw Error("Invalid cursor");cursors.add(cursor);
+   }
+   if(cursor)throw Error("Pagination limit");
+   if(this.servers.get(c.name)!==s)throw Error("Disconnected during initialize");
+   s.tools=found;s.ready=true;for(const t of found)this.tools.set(t.name,{server:c.name,tool:t});
+   this.audit("server_ready",{server:c.name,count:found.length});return [...found];
+  }catch(e){proc.kill();this.fail(c.name,s,e instanceof Error?e:Error(String(e)));throw e}
+ }
+ listTools(){return [...this.tools.values()].map(x=>x.tool)}
+ listServers(){return [...this.servers.entries()].filter(([,s])=>s.ready).map(([n])=>n)}
+ async callTool(name:string,args:Record<string,unknown>={}):Promise<unknown>{
+  const meta=this.tools.get(name);if(!meta){this.audit("tool_unknown",{tool:name});throw Error("Unknown MCP tool")}
+  const s=this.servers.get(meta.server);if(!s?.ready)throw Error("MCP server not ready");
+  if(!args||typeof args!=="object"||Array.isArray(args))throw Error("Invalid argument object");
+  let validate;try{validate=ajv.compile(meta.tool.inputSchema||{type:"object"})}catch{throw Error("Invalid tool schema")}
+  if(!validate(args))throw Error("Invalid MCP tool arguments");
+  if(s.inflight>=Math.max(1,s.config.maxConcurrent??4))throw Error("MCP concurrency limit");
+  if(!approvalGate.needsApproval("mcp_tool"))throw Error("MCP approvals disabled: refusing execution");
+  const ok=await approvalGate.request("mcp_tool","MCP tool "+name,{tool:name,server:meta.server,argumentKeys:Object.keys(args)},"high");
+  if(!ok){this.audit("tool_denied",{tool:name});throw Error("Approval denied for "+name)}
+  s.inflight++;this.audit("tool_call",{tool:name,server:meta.server});
+  try{const result=await this.request(s,"tools/call",{name:name.slice(meta.server.length+2),arguments:args},Number(process.env.MCP_CALL_TIMEOUT_MS)||30000);
+   if(!result||!Array.isArray(result.content))throw Error("Invalid tools/call result");
+   this.audit("tool_result",{tool:name,isError:result.isError===true});return result;
+  }catch(e){this.audit("tool_error",{tool:name});throw e}finally{s.inflight--}
+ }
+ async disconnectAll(){for(const [name,s] of this.servers){this.fail(name,s,Error("MCP disconnected"));s.proc.kill();this.audit("server_disconnect",{server:name})}this.servers.clear();this.tools.clear()}
 }
-
-export interface McpServerConfig {
-  name: string;
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-  cwd?: string;
-  requireApproval?: string[];
-  maxConcurrent?: number;
-}
-
-export class McpClient extends EventEmitter {
-  private servers = new Map<
-    string,
-    { proc: ChildProcess; tools: McpTool[]; config: McpServerConfig; inflight: number }
-  >();
-  private tools = new Map<string, { server: string; tool: McpTool }>();
-  private auditPath: string;
-  private allowedServers: Set<string> | null = null;
-
-  constructor() {
-    super();
-    this.auditPath = process.env.MCP_AUDIT_LOG || process.env.AUDIT_LOG_PATH || "./data/mcp-audit.log";
-    fs.mkdirSync(path.dirname(this.auditPath), { recursive: true });
-    const allow = process.env.MCP_ALLOWED_SERVERS?.split(",").map((s) => s.trim()).filter(Boolean);
-    if (allow?.length) this.allowedServers = new Set(allow);
-  }
-
-  private audit(event: string, detail: Record<string, unknown>) {
-    const line = JSON.stringify({ ts: new Date().toISOString(), event, ...detail }) + "\n";
-    try {
-      fs.appendFileSync(this.auditPath, line);
-    } catch {
-      /* ignore */
-    }
-  }
-
-  async connect(config: McpServerConfig): Promise<McpTool[]> {
-    if (this.allowedServers && !this.allowedServers.has(config.name)) {
-      throw new Error(`MCP server "${config.name}" is not in MCP_ALLOWED_SERVERS allowlist`);
-    }
-    if (this.servers.has(config.name)) {
-      return this.servers.get(config.name)!.tools;
-    }
-
-    if (/[;&|`$]/.test(config.command)) {
-      throw new Error(`Refusing MCP command with shell metacharacters: ${config.command}`);
-    }
-
-    const proc = spawn(config.command, config.args || [], {
-      env: { ...process.env, ...config.env },
-      cwd: config.cwd,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    const tools: McpTool[] = [
-      {
-        name: `${config.name}__ping`,
-        description: `Health check for MCP server ${config.name}`,
-        inputSchema: { type: "object", properties: {}, additionalProperties: false },
-      },
-      {
-        name: `${config.name}__echo`,
-        description: `Echo a short string (max 200 chars) — safe test tool`,
-        inputSchema: {
-          type: "object",
-          properties: { text: { type: "string", maxLength: 200 } },
-          required: ["text"],
-          additionalProperties: false,
-        },
-      },
-    ];
-
-    this.servers.set(config.name, { proc, tools, config, inflight: 0 });
-    for (const t of tools) {
-      this.tools.set(t.name, { server: config.name, tool: t });
-    }
-
-    proc.on("exit", (code) => {
-      this.audit("server_exit", { server: config.name, code });
-      this.servers.delete(config.name);
-      for (const [name, meta] of this.tools) {
-        if (meta.server === config.name) this.tools.delete(name);
-      }
-    });
-
-    proc.stderr?.on("data", (d) => {
-      this.audit("server_stderr", { server: config.name, chunk: d.toString().slice(0, 500) });
-    });
-
-    this.audit("server_connect", { server: config.name, command: config.command });
-    return tools;
-  }
-
-  listTools(): McpTool[] {
-    return [...this.tools.values()].map((t) => t.tool);
-  }
-
-  listServers(): string[] {
-    return [...this.servers.keys()];
-  }
-
-  private validateArgs(schema: Record<string, unknown> | undefined, args: Record<string, unknown>): void {
-    if (!schema || schema.type !== "object") return;
-    const props = (schema.properties || {}) as Record<string, any>;
-    const required = (schema.required || []) as string[];
-    const additional = schema.additionalProperties;
-
-    for (const key of required) {
-      if (!(key in args)) throw new Error(`Missing required argument: ${key}`);
-    }
-    if (additional === false) {
-      for (const key of Object.keys(args)) {
-        if (!(key in props)) throw new Error(`Unexpected argument: ${key}`);
-      }
-    }
-    for (const [key, val] of Object.entries(args)) {
-      const p = props[key];
-      if (!p) continue;
-      if (p.type === "string" && typeof val !== "string") {
-        throw new Error(`Argument ${key} must be string`);
-      }
-      if (p.type === "string" && typeof p.maxLength === "number" && String(val).length > p.maxLength) {
-        throw new Error(`Argument ${key} exceeds maxLength ${p.maxLength}`);
-      }
-      if (p.type === "number" && typeof val !== "number") {
-        throw new Error(`Argument ${key} must be number`);
-      }
-      if (p.pattern && typeof val === "string") {
-        const re = new RegExp(p.pattern);
-        if (!re.test(val)) throw new Error(`Argument ${key} failed pattern ${p.pattern}`);
-      }
-    }
-  }
-
-  private isDestructive(tool: McpTool, serverConfig: McpServerConfig): boolean {
-    if (tool.destructive || tool.openWorld) return true;
-    const name = tool.name.split("__").pop() || tool.name;
-    if (serverConfig.requireApproval?.includes(name) || serverConfig.requireApproval?.includes(tool.name)) {
-      return true;
-    }
-    return /write|delete|remove|send|post|exec|run|shell|purchase|commit|deploy/i.test(tool.name);
-  }
-
-  async callTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
-    const meta = this.tools.get(name);
-    if (!meta) {
-      this.audit("tool_unknown", { name, args });
-      throw new Error(`Unknown MCP tool: ${name}`);
-    }
-
-    const server = this.servers.get(meta.server);
-    if (!server) throw new Error(`MCP server not connected: ${meta.server}`);
-
-    const max = server.config.maxConcurrent ?? 4;
-    if (server.inflight >= max) {
-      throw new Error(`MCP server ${meta.server} at concurrency limit (${max})`);
-    }
-
-    this.validateArgs(meta.tool.inputSchema, args);
-
-    if (this.isDestructive(meta.tool, server.config)) {
-      const ok = await approvalGate.request(
-        "mcp_tool",
-        `MCP tool ${name}`,
-        { tool: name, args },
-        "high"
-      );
-      if (!ok) {
-        this.audit("tool_denied", { name, args });
-        throw new Error(`Approval denied for MCP tool ${name}`);
-      }
-    }
-
-    server.inflight++;
-    this.audit("tool_call", { name, args, server: meta.server });
-
-    try {
-      if (name.endsWith("__ping")) {
-        return { ok: true, server: meta.server, ts: Date.now() };
-      }
-      if (name.endsWith("__echo")) {
-        return { echo: String(args.text ?? "").slice(0, 200) };
-      }
-
-      return {
-        ok: false,
-        error: "Full JSON-RPC tools/call not yet wired; use built-in tools or extend McpClient",
-        name,
-        args,
-      };
-    } finally {
-      server.inflight--;
-    }
-  }
-
-  async disconnectAll() {
-    for (const [name, { proc }] of this.servers) {
-      proc.kill();
-      this.audit("server_disconnect", { server: name });
-    }
-    this.servers.clear();
-    this.tools.clear();
-  }
-}
-
-export const mcpHub = new McpClient();
+export const mcpHub=new McpClient();
