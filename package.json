@@ -12,7 +12,8 @@
     "desktop": "electron desktop/main.js",
     "test:opencode": "tsx scripts/test-opencode.ts",
     "docker:up": "docker compose up -d --build",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "test:mcp": "tsx scripts/test-mcp.ts"
   },
   "keywords": [
     "grok-bot",
@@ -35,7 +36,8 @@
     "hono": "^4.6.14",
     "playwright": "^1.49.1",
     "uuid": "^11.0.3",
-    "zod": "^3.24.1"
+    "zod": "^3.24.1",
+    "ajv": "^8.17.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
