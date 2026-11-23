@@ -6,6 +6,8 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { timingSafeEqual } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { supervisor } from "../orchestrator/supervisor.js";
@@ -20,7 +22,28 @@ const uiRoot = path.join(__dirname, "../ui");
 
 const app = new Hono();
 app.use("*", logger());
-app.use("*", cors());
+// No permissive CORS: browser requests must originate from this local UI.
+const apiToken = process.env.PRIME_API_TOKEN || "";
+const safeHost = process.env.HOST || "127.0.0.1";
+if (!["127.0.0.1", "localhost", "::1"].includes(safeHost)) {
+  throw new Error("Remote binding disabled until a separately authenticated deployment is implemented");
+}
+function tokenMatches(value: string): boolean {
+  if (!apiToken || !value) return false;
+  const a=Buffer.from(value); const b=Buffer.from(apiToken);
+  return a.length===b.length && timingSafeEqual(a,b);
+}
+app.use("*", async (c,next)=>{
+  if (c.req.method !== "GET" && c.req.method !== "HEAD") {
+    const origin=c.req.header("origin");
+    const host=c.req.header("host");
+    if (origin && (!host || new URL(origin).host !== host)) return c.json({error:"Origin rejected"},403);
+    const token=(c.req.header("authorization")||"").replace(/^Bearer\s+/i,"");
+    if (!tokenMatches(token)) return c.json({error:"API token required"},401);
+  }
+  await next();
+});
+if (!apiToken) console.warn("PRIME_API_TOKEN unset: all write endpoints are disabled until configured.");
 
 app.get("/health", async (c) => {
   const cli = await modelRouter.pingOpenCode().catch((e: any) => ({
@@ -104,7 +127,20 @@ app.post("/mcp/call", async (c) => {
 });
 
 const port = Number(process.env.PORT) || 8799;
-const host = process.env.HOST || "127.0.0.1";
+const host = safeHost;
 
+// Trusted local configuration only; never accept executable registration over HTTP.
+const mcpConfigPath=process.env.MCP_SERVERS_CONFIG;
+if(mcpConfigPath){
+  try{
+    const configs=JSON.parse(fs.readFileSync(mcpConfigPath,"utf8"));
+    if(!Array.isArray(configs)) throw Error("MCP_SERVERS_CONFIG must contain an array");
+    for(const cfg of configs){
+      if(!cfg || typeof cfg.name!=="string" || typeof cfg.command!=="string") throw Error("Invalid MCP server config");
+      void mcpHub.connect(cfg).then(tools=>console.log("MCP ready:",cfg.name,tools.length))
+        .catch(e=>console.error("MCP connect failed:",cfg.name,String(e.message)));
+    }
+  }catch(e){console.error("MCP configuration error:",e);process.exitCode=1;throw e}
+}
 console.log(`OpenGrokBot-Prime API listening on http://${host}:${port}`);
 serve({ fetch: app.fetch, port, hostname: host });

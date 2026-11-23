@@ -99,7 +99,7 @@
     <div id="agents"><div class="empty">Loading…</div></div>
   </aside>
   <main id="chat">
-    <header>OpenGrokBot-Prime</header>
+    <header>OpenGrokBot-Prime <input id="api-token" type="password" placeholder="Local API token" autocomplete="off" aria-label="Local API token" style="float:right;background:#12181f;color:white;border:1px solid #1e2833;padding:5px;border-radius:5px" /></header>
     <div id="messages"></div>
     <div id="composer">
       <input id="input" placeholder="Ask the team…" autocomplete="off" />
@@ -118,7 +118,7 @@
 
     async function j(path, opts) {
       const r = await fetch(API + path, {
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + document.getElementById("api-token").value },
         ...opts,
       });
       return r.json();
