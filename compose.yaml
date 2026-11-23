@@ -1,0 +1,11 @@
+services:
+  primebot:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      PRIMEBOT_BACKEND: "${PRIMEBOT_BACKEND:-echo}"
+      PRIMEBOT_BASE_URL: "${PRIMEBOT_BASE_URL:-}"
+      PRIMEBOT_MODEL: "${PRIMEBOT_MODEL:-}"
+      PRIMEBOT_API_KEY: "${PRIMEBOT_API_KEY:-}"
+    restart: "no"
