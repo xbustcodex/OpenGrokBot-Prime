@@ -116,6 +116,12 @@
   <script>
     const API = "";
 
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, ch => ({
+        "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
+      })[ch]);
+    }
+
     async function j(path, opts) {
       const r = await fetch(API + path, {
         headers: { "Content-Type": "application/json", "Authorization": "Bearer " + document.getElementById("api-token").value },
@@ -139,7 +145,7 @@
       for (const a of agents) {
         const d = document.createElement("div");
         d.className = "agent";
-        d.innerHTML = `<strong>${a.name}</strong><small>${a.role} · ${a.tools.join(", ")}</small>`;
+        d.innerHTML = `<strong>${esc(a.name)}</strong><small>${esc(a.role)} · ${esc(a.tools.join(", "))}</small>`;
         root.appendChild(d);
       }
     }
@@ -155,10 +161,10 @@
       for (const a of list) {
         const d = document.createElement("div");
         d.className = "approval";
-        d.innerHTML = `<strong>${a.action}</strong><div>${a.description}</div>
+        d.innerHTML = `<strong>${esc(a.action)}</strong><div>${esc(a.description)}</div>
           <div class="actions">
-            <button class="approve" data-id="${a.id}" data-ok="1">Approve</button>
-            <button class="deny" data-id="${a.id}" data-ok="0">Deny</button>
+            <button class="approve" data-id="${esc(a.id)}" data-ok="1">Approve</button>
+            <button class="deny" data-id="${esc(a.id)}" data-ok="0">Deny</button>
           </div>`;
         root.appendChild(d);
       }
@@ -184,7 +190,7 @@
       for (const f of facts.slice(0, 30)) {
         const d = document.createElement("div");
         d.className = "fact";
-        d.innerHTML = `<strong>${f.key}</strong><small>${f.value.slice(0, 120)}</small>`;
+        d.innerHTML = `<strong>${esc(f.key)}</strong><small>${esc(f.value.slice(0, 120))}</small>`;
         root.appendChild(d);
       }
     }
