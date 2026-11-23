@@ -15,6 +15,10 @@ export class Supervisor {
   private agents: Map<string, AgentConfig>;
   private tasks = new Map<string, Task>();
   private conversation: Message[] = [];
+  private preferredModel: string | undefined;
+
+  getPreferredModel() { return this.preferredModel || null; }
+  setPreferredModel(model: string | null) { this.preferredModel = model || undefined; }
 
   constructor(agents: AgentConfig[] = DEFAULT_AGENTS) {
     this.agents = new Map(agents.map((a) => [a.id, a]));
@@ -228,6 +232,7 @@ export class Supervisor {
     const preferFree = agentId !== "supervisor";
     const res = await modelRouter.chat({
       messages,
+      model: this.preferredModel,
       preferFree,
       temperature: 0.3,
       maxTokens: 2048,

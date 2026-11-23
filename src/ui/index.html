@@ -90,16 +90,31 @@
     button.deny { background: var(--danger); }
     button.approve { background: var(--ok); }
     .actions { display: flex; gap: 6px; margin-top: 8px; }
-    .empty { color: var(--muted); padding: 16px; font-size: 13px; }
+.empty { color: var(--muted); padding: 16px; font-size: 13px; }
+    .toolbar { display:flex; align-items:center; gap:8px; justify-content:space-between; }
+    .toolbar button { padding:7px 10px; font-size:12px; }
+    #control-center { display:none; position:fixed; inset:0; z-index:20; background:rgba(0,0,0,.72); padding:3vh 3vw; }
+    #control-center.open { display:block; }
+    .control-shell { max-width:1100px; margin:auto; height:94vh; overflow:auto; background:var(--bg); border:1px solid var(--border); border-radius:14px; padding:20px; }
+    .control-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:14px; }
+    .control-card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px; }
+    .control-card h3 { margin:0 0 12px; font-size:15px; }
+    .control-card p, .control-card li { color:var(--muted); font-size:13px; line-height:1.6; }
+    .control-card select { width:100%; padding:10px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:8px; }
+    .control-card button { margin-top:10px; }
+    .status-line { padding:6px 0; border-bottom:1px solid var(--border); font-size:13px; overflow-wrap:anywhere; }
+    #settings-feedback { min-height:20px; color:var(--muted); font-size:13px; }
+    @media(max-width:850px){body{grid-template-columns:180px 1fr}.side{display:none}}
+    @media(max-width:580px){body{grid-template-columns:1fr}aside{display:none}#control-center{padding:0}.control-shell{height:100vh;border-radius:0}}
   </style>
 </head>
 <body>
   <aside>
-    <header>Agents</header>
+    <header class="toolbar"><span>Agents</span><button id="open-controls-side" type="button">Controls</button></header>
     <div id="agents"><div class="empty">Loading…</div></div>
   </aside>
   <main id="chat">
-    <header>OpenGrokBot-Prime <input id="api-token" type="password" placeholder="Local API token" autocomplete="off" aria-label="Local API token" style="float:right;background:#12181f;color:white;border:1px solid #1e2833;padding:5px;border-radius:5px" /></header>
+    <header class="toolbar"><span>OpenGrokBot-Prime</span><button id="open-controls" type="button">Settings &amp; Tools</button><input id="api-token" type="password" placeholder="Local API token" autocomplete="off" aria-label="Local API token" style="float:right;background:#12181f;color:white;border:1px solid #1e2833;padding:5px;border-radius:5px" /></header>
     <div id="messages"></div>
     <div id="composer">
       <input id="input" placeholder="Ask the team…" autocomplete="off" />
@@ -113,6 +128,26 @@
     <div id="facts"><div class="empty">—</div></div>
   </div>
 
+  <section id="control-center" role="dialog" aria-modal="true" aria-label="Bot settings and controls">
+    <div class="control-shell">
+      <header class="toolbar"><span>Settings &amp; Control Center</span><button id="close-controls" type="button">Close</button></header>
+      <p style="color:var(--muted);font-size:13px">Configure free model preference, inspect MCP connections, review tasks, and check the bot's runtime status. Changes to the model apply to subsequent agent turns.</p>
+      <div class="control-grid">
+        <section class="control-card"><h3>Free model routing</h3>
+          <p id="routing-status">Loading…</p>
+          <label for="model-select">Preferred free model</label>
+          <select id="model-select"><option value="">Automatic free fallback</option></select>
+          <button id="save-model" type="button">Apply model</button><p id="settings-feedback" aria-live="polite"></p>
+          <p>Paid models cannot be selected here. The choice is temporary until the server restarts.</p>
+        </section>
+        <section class="control-card"><h3>Runtime health</h3><div id="runtime-status">Loading…</div><button id="refresh-controls" type="button">Refresh status</button></section>
+        <section class="control-card"><h3>MCP connections &amp; tools</h3><div id="mcp-status">Loading…</div><p>Configure trusted servers using MCP_SERVERS_CONFIG in the local environment, then restart the bot.</p></section>
+        <section class="control-card"><h3>Agent tasks</h3><div id="task-status">Loading…</div></section>
+        <section class="control-card"><h3>Approvals &amp; security</h3><div id="security-status">Loading…</div><p>Approvals appear in the main panel. The local API token is required to approve or deny actions.</p></section>
+        <section class="control-card"><h3>Session controls</h3><p>Review the conversation and return to chat.</p><button id="load-conversation" type="button">Load conversation</button><p>Conversation history is kept in memory for the current server session.</p></section>
+      </div>
+    </div>
+  </section>
   <script>
     const API = "";
 
@@ -216,6 +251,45 @@
     document.getElementById("input").addEventListener("keydown", (e) => {
       if (e.key === "Enter") document.getElementById("send").click();
     });
+
+    const controls=document.getElementById("control-center");
+    const showControls=async()=>{controls.classList.add("open");await refreshControls();};
+    document.getElementById("open-controls").onclick=showControls;
+    document.getElementById("open-controls-side").onclick=showControls;
+    document.getElementById("close-controls").onclick=()=>controls.classList.remove("open");
+    document.addEventListener("keydown",e=>{if(e.key==="Escape")controls.classList.remove("open");});
+    document.getElementById("refresh-controls").onclick=refreshControls;
+    document.getElementById("save-model").onclick=async()=>{
+      const preferredModel=document.getElementById("model-select").value||null;
+      const result=await j("/settings",{method:"POST",body:JSON.stringify({preferredModel})});
+      document.getElementById("settings-feedback").textContent=result.error||"Model preference applied.";
+      if(!result.error)await refreshControls();
+    };
+    document.getElementById("load-conversation").onclick=async()=>{
+      const entries=await j("/conversation");
+      const root=document.getElementById("messages");root.replaceChildren();
+      for(const entry of entries)addMsg(entry.role==="user"?"user":"assistant",entry.content);
+      controls.classList.remove("open");
+    };
+    async function refreshControls(){
+      try{
+        const [settings,health,tasks]=await Promise.all([j("/settings"),j("/health"),j("/tasks")]);
+        document.getElementById("routing-status").textContent=settings.freeOnly?"FREE ONLY — paid routing disabled":"Warning: FREE_ONLY is disabled";
+        const select=document.getElementById("model-select");
+        select.replaceChildren(new Option("Automatic free fallback",""));
+        for(const name of settings.freeModels)select.add(new Option(name,name));
+        select.value=settings.preferredModel||"";
+        document.getElementById("runtime-status").textContent="OpenCode CLI: "+(health.opencodeCli?.ok?"Available ("+health.opencodeCli.version+")":"Unavailable")+
+          " | Host: "+settings.binding+" | Free models: "+settings.freeModels.length;
+        const servers=settings.mcpServers||[],tools=settings.mcpTools||[];
+        document.getElementById("mcp-status").textContent="Connected servers: "+(servers.join(", ")||"None")+
+          "\\nDiscovered tools: "+(tools.map(t=>t.name).join(", ")||"None");
+        document.getElementById("task-status").textContent=tasks.length?
+          tasks.slice(-15).map(t=>t.assignedTo+": "+t.status+" — "+t.title).join("\\n"):"No tasks recorded.";
+        document.getElementById("security-status").textContent="MCP approvals: "+(settings.approvalRequired?"Required":"Disabled — MCP calls blocked")+
+          " | API token: "+(settings.apiTokenConfigured?"Configured":"Missing — writes blocked");
+      }catch(err){document.getElementById("settings-feedback").textContent="Unable to load controls: "+err.message;}
+    }
 
     refreshAgents();
     refreshApprovals();
