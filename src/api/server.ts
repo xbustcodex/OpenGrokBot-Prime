@@ -23,13 +23,19 @@ const app = new Hono();
 app.use("*", logger());
 app.use("*", cors());
 
-app.get("/health", (c) =>
-  c.json({
+app.get("/health", async (c) => {
+  const cli = await modelRouter.pingOpenCode().catch((e: any) => ({
+    ok: false,
+    error: String(e?.message || e),
+  }));
+  return c.json({
     ok: true,
     service: "OpenGrokBot-Prime",
+    freeOnly: modelRouter.isFreeOnly(),
     freeModels: modelRouter.listFreeModels(),
-  })
-);
+    opencodeCli: cli,
+  });
+});
 
 app.get("/", async (c) => {
   const { readFile } = await import("node:fs/promises");
