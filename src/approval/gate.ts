@@ -16,6 +16,7 @@ const DEFAULT_REQUIRE = new Set([
   "delete",
   "purchase",
   "shell_dangerous",
+  "mcp_tool",
 ]);
 
 export class ApprovalGate {

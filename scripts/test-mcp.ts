@@ -1,6 +1,7 @@
 import {strict as assert} from "node:assert";
-import {McpClient} from "../src/mcp/client.js";
-import {approvalGate} from "../src/approval/gate.js";
+process.env.REQUIRE_APPROVAL_FOR = "mcp_tool";
+const {McpClient} = await import("../src/mcp/client.js");
+const {approvalGate} = await import("../src/approval/gate.js");
 import {fileURLToPath} from "node:url";
 const fixture=fileURLToPath(new URL("./fixtures/mcp-stdio-fixture.mjs",import.meta.url));
 const hub=new McpClient();

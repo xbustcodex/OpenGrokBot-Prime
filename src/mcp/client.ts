@@ -1,7 +1,7 @@
 import {spawn} from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import Ajv from "ajv";
+import { Ajv } from "ajv";
 import {approvalGate} from "../approval/gate.js";
 export interface McpTool {name:string;description?:string;inputSchema?:Record<string,unknown>;destructive?:boolean;openWorld?:boolean}
 export interface McpServerConfig {name:string;command:string;args?:string[];env?:Record<string,string>;cwd?:string;requireApproval?:string[];maxConcurrent?:number}
