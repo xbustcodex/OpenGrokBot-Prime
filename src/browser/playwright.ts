@@ -5,6 +5,7 @@
 import { chromium, Browser, Page, BrowserContext } from "playwright";
 import path from "node:path";
 import fs from "node:fs";
+import { isIP } from "node:net";
 import { approvalGate } from "../approval/gate.js";
 
 export class BrowserSandbox {
@@ -23,12 +24,21 @@ export class BrowserSandbox {
     if (this.browser) return;
     this.browser = await chromium.launch({
       headless: this.headless,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      // Never disable Chromium sandbox for convenience.
+      chromiumSandbox: true,
     });
     this.context = await this.browser.newContext({
+      acceptDownloads: false,
       viewport: { width: 1280, height: 800 },
       userAgent:
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    });
+    await this.context.route("**/*", async route => {
+      try {
+        const target = new URL(route.request().url());
+        if (!isPublicBrowserUrl(target)) return route.abort("blockedbyclient");
+        return route.continue();
+      } catch { return route.abort("blockedbyclient"); }
     });
   }
 
@@ -39,7 +49,9 @@ export class BrowserSandbox {
 
   async navigate(url: string, page?: Page): Promise<{ title: string; url: string; text: string }> {
     const p = page || (await this.newPage());
-    const host = new URL(url).hostname;
+    const target = new URL(url);
+    if (!isPublicBrowserUrl(target)) throw new Error("Browser navigation target blocked");
+    const host = target.hostname;
     if (this.isSensitive(host)) {
       const ok = await approvalGate.request(
         "network_sensitive",
@@ -63,15 +75,19 @@ export class BrowserSandbox {
   }
 
   async click(page: Page, selector: string) {
+    const allowed = await approvalGate.request("network_sensitive", "Browser click", { selector }, "high");
+    if (!allowed) throw new Error("Browser click denied");
     await page.click(selector, { timeout: 10_000 });
   }
 
   async type(page: Page, selector: string, text: string) {
+    const allowed = await approvalGate.request("network_sensitive", "Browser fill", { selector }, "high");
+    if (!allowed) throw new Error("Browser fill denied");
     await page.fill(selector, text);
   }
 
   async evaluate(page: Page, script: string): Promise<unknown> {
-    return page.evaluate(script);
+    throw new Error("Arbitrary browser script evaluation is disabled");
   }
 
   private isSensitive(host: string): boolean {
@@ -88,3 +104,18 @@ export class BrowserSandbox {
 }
 
 export const browserSandbox = new BrowserSandbox();
+
+/** Conservative URL gate for browser requests, including redirects/subresources. */
+export function isPublicBrowserUrl(url: URL): boolean {
+  if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+  const host = url.hostname.toLowerCase().replace(/\\.$/, "").replace(/^\\[|\\]$/g, "");
+  if (!host || host === "localhost" || host.endsWith(".localhost") ||
+      host.endsWith(".local") || host.endsWith(".internal") ||
+      host.endsWith(".test") || host.endsWith(".invalid")) return false;
+  // Block all IP literals (including IPv6 and IPv4-mapped IPv6) rather than
+  // trying to distinguish public from private address ranges.
+  if (isIP(host)) return false;
+  if (/^[0-9.]+$/.test(host)) return false;
+  if (!host.includes(".")) return false;
+  return true;
+}
