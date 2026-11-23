@@ -54,7 +54,7 @@ export class OpenCodeBackend {
       (process.env.FREE_MODELS?.split(",").map((s) => s.trim()).filter(Boolean) ??
         DEFAULT_FREE_MODELS);
     this.cliPath = opts?.cliPath || process.env.OPENCODE_CLI || "opencode";
-    this.timeoutMs = opts?.timeoutMs ?? Number(process.env.OPENCODE_TIMEOUT_MS) || 120_000;
+    this.timeoutMs = opts?.timeoutMs ?? (Number(process.env.OPENCODE_TIMEOUT_MS) || 120_000);
     this.freeOnly =
       opts?.freeOnly ??
       (process.env.FREE_ONLY !== "0" && process.env.FREE_ONLY !== "false");

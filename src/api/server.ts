@@ -1,3 +1,4 @@
+import "dotenv/config";
 /**
  * Hono API — orchestrator, approvals, memory, agents, health.
  */
@@ -5,7 +6,6 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { supervisor } from "../orchestrator/supervisor.js";
@@ -14,7 +14,6 @@ import { memory } from "../memory/store.js";
 import { modelRouter } from "../backends/router.js";
 import { mcpHub } from "../mcp/client.js";
 
-dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uiRoot = path.join(__dirname, "../ui");

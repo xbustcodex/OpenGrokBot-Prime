@@ -1,3 +1,4 @@
+import "dotenv/config";
 /**
  * Probe OpenCode CLI + free-only routing.
  * Requires `opencode` on PATH (or OPENCODE_CLI).
