@@ -69,6 +69,26 @@ app.get("/", async (c) => {
   }
 });
 
+app.get("/settings", (c) => c.json({
+  freeOnly: modelRouter.isFreeOnly(),
+  freeModels: modelRouter.listFreeModels(),
+  preferredModel: supervisor.getPreferredModel(),
+  mcpServers: mcpHub.listServers(),
+  mcpTools: mcpHub.listTools().map(t=>({name:t.name,description:t.description||""})),
+  approvalRequired: approvalGate.needsApproval("mcp_tool"),
+  apiTokenConfigured: Boolean(apiToken),
+  binding: safeHost,
+}));
+app.post("/settings", async (c) => {
+  const body=await c.req.json().catch(()=>({}));
+  if (!body || !Object.prototype.hasOwnProperty.call(body,"preferredModel")) return c.json({error:"preferredModel required"},400);
+  const selected=body.preferredModel;
+  if (selected !== null && (typeof selected!=="string" || !modelRouter.listFreeModels().includes(selected))) {
+    return c.json({error:"Only listed free models can be selected"},400);
+  }
+  supervisor.setPreferredModel(selected);
+  return c.json({preferredModel:supervisor.getPreferredModel()});
+});
 app.get("/agents", (c) => c.json(supervisor.listAgents()));
 app.get("/tasks", (c) => c.json(supervisor.listTasks()));
 app.get("/conversation", (c) => c.json(supervisor.getConversation()));
