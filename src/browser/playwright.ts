@@ -52,6 +52,7 @@ export class BrowserSandbox {
     const target = new URL(url);
     if (!isPublicBrowserUrl(target)) throw new Error("Browser navigation target blocked");
     const host = target.hostname;
+    if (!approvalGate.needsApproval("network_sensitive")) throw new Error("Browser approval policy disabled");
     if (this.isSensitive(host)) {
       const ok = await approvalGate.request(
         "network_sensitive",
@@ -75,12 +76,14 @@ export class BrowserSandbox {
   }
 
   async click(page: Page, selector: string) {
+    if (!approvalGate.needsApproval("network_sensitive")) throw new Error("Browser approval policy disabled");
     const allowed = await approvalGate.request("network_sensitive", "Browser click", { selector }, "high");
     if (!allowed) throw new Error("Browser click denied");
     await page.click(selector, { timeout: 10_000 });
   }
 
   async type(page: Page, selector: string, text: string) {
+    if (!approvalGate.needsApproval("network_sensitive")) throw new Error("Browser approval policy disabled");
     const allowed = await approvalGate.request("network_sensitive", "Browser fill", { selector }, "high");
     if (!allowed) throw new Error("Browser fill denied");
     await page.fill(selector, text);
