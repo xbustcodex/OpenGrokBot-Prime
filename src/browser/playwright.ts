@@ -108,7 +108,7 @@ export const browserSandbox = new BrowserSandbox();
 /** Conservative URL gate for browser requests, including redirects/subresources. */
 export function isPublicBrowserUrl(url: URL): boolean {
   if (url.protocol !== "https:" && url.protocol !== "http:") return false;
-  const host = url.hostname.toLowerCase().replace(/\\.$/, "").replace(/^\\[|\\]$/g, "");
+  const host = url.hostname.toLowerCase().replace(/\.$/, "").replace(/^\[|\]$/g, "");
   if (!host || host === "localhost" || host.endsWith(".localhost") ||
       host.endsWith(".local") || host.endsWith(".internal") ||
       host.endsWith(".test") || host.endsWith(".invalid")) return false;
