@@ -1,19 +1,38 @@
 /**
- * Model router — OpenCode is one backend among OpenRouter, OpenAI, Anthropic, local.
+ * Model router — OpenCode is one backend among others.
+ * Default policy: FREE_ONLY (no automatic paid escalation).
  */
 import { OpenCodeBackend } from "./opencode.js";
 import { ModelCallOptions, ModelResponse, BackendName } from "../types.js";
 
 export class ModelRouter {
   private opencode: OpenCodeBackend;
+  private freeOnly: boolean;
   private defaultBackend: BackendName = "opencode";
 
   constructor() {
-    this.opencode = new OpenCodeBackend();
+    this.freeOnly =
+      process.env.FREE_ONLY !== "0" && process.env.FREE_ONLY !== "false";
+    this.opencode = new OpenCodeBackend({ freeOnly: this.freeOnly });
+  }
+
+  listFreeModels(): string[] {
+    return this.opencode.listFreeModels();
+  }
+
+  isFreeOnly(): boolean {
+    return this.freeOnly;
   }
 
   async chat(options: ModelCallOptions & { backend?: BackendName }): Promise<ModelResponse> {
     const backend = options.backend || this.pickBackend(options.model);
+
+    if (this.freeOnly && backend !== "opencode" && backend !== "local") {
+      throw new Error(
+        `FREE_ONLY is enabled: backend "${backend}" is blocked. ` +
+          `Only OpenCode free models (and optional local) are allowed.`
+      );
+    }
 
     switch (backend) {
       case "opencode":
@@ -45,10 +64,13 @@ export class ModelRouter {
 
   private pickBackend(model?: string): BackendName {
     if (!model) return this.defaultBackend;
-    if (model.startsWith("opencode/") || model.includes("free")) return "opencode";
-    if (model.startsWith("openrouter/") || model.includes("/")) return "openrouter";
+    if (model.startsWith("opencode/") || model.includes("free") || model.includes("big-pickle")) {
+      return "opencode";
+    }
+    if (model.startsWith("openrouter/") || model.includes(":free")) return "openrouter";
     if (model.startsWith("gpt-") || model.startsWith("o1") || model.startsWith("o3")) return "openai";
     if (model.startsWith("claude")) return "anthropic";
+    if (model.startsWith("ollama/") || model.startsWith("local/")) return "local";
     return this.defaultBackend;
   }
 
@@ -139,8 +161,8 @@ export class ModelRouter {
     };
   }
 
-  listFreeModels() {
-    return this.opencode.listFreeModels();
+  async pingOpenCode() {
+    return this.opencode.ping();
   }
 }
 
